@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<seq>
+	<video src="http://static.smdg.ca/videoPlayer/big_buck_bunny.mp4">
+		<param name="title" value="Big Buck Bunny"/>
+		<param name="duration" value="30000"/>
+	</video>
+</seq>

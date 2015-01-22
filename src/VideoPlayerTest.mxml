@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:Application xmlns:fx="http://ns.adobe.com/mxml/2009" 
+			   xmlns:s="library://ns.adobe.com/flex/spark" 
+			   xmlns:mx="library://ns.adobe.com/flex/mx" minWidth="955" minHeight="600"
+			   backgroundColor="#FFFFFF" backgroundAlpha="0.0"
+			   creationComplete="init(event)"
+			   >
+	<fx:Style>
+		@namespace s "library://ns.adobe.com/flex/spark";
+		@namespace mx "library://ns.adobe.com/flex/mx";
+		
+	</fx:Style>
+	
+	<fx:Script>
+		<![CDATA[
+			import mx.collections.ArrayCollection;
+			import mx.events.DragEvent;
+			import mx.events.FlexEvent;
+			import mx.rpc.events.ResultEvent;
+			
+			import utils.types.VideoStatusEnum;
+			
+			private var _myVideo:Video;
+			private var _nc:NetConnection;
+			private var _ns:NetStream;
+			private var _videoUrl:String;
+			private var _videoParams:ArrayCollection;
+			private var _videoStatus:VideoStatusEnum;
+			private var _videoDuration:Number;
+			private var _videoOriginalDuration:Number;
+			
+			protected function init(event:FlexEvent):void
+			{
+				trace("*******************************");
+				trace("* VideoPlayerTest.init()      *");
+				trace("*******************************");
+				
+				// init
+				_nc = new NetConnection();
+				_ns = null;
+				_myVideo = new Video();
+				_videoStatus = VideoStatusEnum.VIDEO_STATUS_STOP;
+				_videoDuration = 0;
+				_videoOriginalDuration = 0;
+				
+				// Load XML.
+				xmlHttpService.send();
+				
+			}
+			
+			protected function xmlHttpService_resultHandler(evt:ResultEvent):void
+			{
+				/*
+				<seq>
+				<video src="http://static.smdg.ca/videoPlayer/big_buck_bunny.mp4">
+					<param name="title" value="Big Buck Bunny"/>
+					<param name="duration" value="30000"/>
+				</video>
+				</seq>
+				*/
+				
+				trace("xmlHttpService_resultHandler: " + evt.result.seq.video.src);
+				
+				_videoUrl = evt.result.seq.video.src;
+				_videoParams = evt.result.seq.video.param;
+				
+				// connecting to server.
+				_nc.addEventListener(NetStatusEvent.NET_STATUS, onStatus);
+				_nc.connect(null);
+			}
+			
+			private function onStatus(infoObject:NetStatusEvent):void
+			{
+				switch(infoObject.info.code)
+				{
+					case "NetConnection.Connect.Success":
+						var customClient:Object = new Object();
+						customClient.onMetaData = function(infoObject:Object):void{
+							// NOTE: framerate is undefined. Therefore, we can only use NetStream.seek than NetStream.step
+							trace("Metadata: width=" + infoObject.width + " height=" + infoObject.height + " duration=" + Math.floor(infoObject.duration) + " framerate=" + infoObject.framerate);
+							
+							_myVideo.width = infoObject.width;
+							_myVideo.height = infoObject.height;
+							playerControllerGroup.y = _myVideo.height;
+							_videoOriginalDuration = Math.floor(infoObject.duration);
+						};
+						
+						_ns = new NetStream(_nc);
+						_ns.addEventListener(AsyncErrorEvent.ASYNC_ERROR, function(event:AsyncErrorEvent):void{
+							trace(event.text);
+						});
+						_ns.addEventListener(NetStatusEvent.NET_STATUS, onStatus);
+						_ns.client = customClient;
+						_ns.bufferTime = 3;
+						_ns.inBufferSeek = true;
+						_ns.play(_videoUrl);
+						
+						for each(var o:Object in _videoParams){
+							switch(o.name){
+								case "title":
+									lblTitle.text = o.value;
+									break;
+								case "duration":
+									lblTotal.text = (o.value/1000).toString();
+									_videoDuration = o.value/1000;
+									break;
+							}
+						}
+						
+						seekBar.maximum = _videoDuration;
+						seekBar.minimum = 0;
+						seekBar.snapInterval = (seekBar.maximum - seekBar.minimum) / _videoDuration;
+						
+						_myVideo.attachNetStream(_ns);
+						videoDisplay.addChild(_myVideo);
+						break;
+					case "NetConnection.Connect.Failed": 
+						// Handle this case here. 
+						break; 
+					case "NetStream.Buffer.Full": 
+						_ns.bufferTime = 10; 
+						break; 
+					case "NetStream.Buffer.Empty": 
+						_ns.bufferTime = 3; 
+						break; 
+					
+					case "NetStream.Play.Stop":
+					case "NetStream.Buffer.Empty":
+						// End of play of original video
+						_videoStatus = VideoStatusEnum.VIDEO_STATUS_STOP;
+						break;
+					case "NetStream.Play.Start":
+					case "NetStream.Unpause.Notify":
+						_videoStatus = VideoStatusEnum.VIDEO_STATUS_PLAYING;
+						break;
+					case "NetStream.Pause.Notify":
+						_videoStatus = VideoStatusEnum.VIDEO_STATUS_PAUSING;
+						break;
+					case "NetStream.SeekStart.Notify":
+						break;
+					case "NetStream.Seek.Notify":
+						break;
+				}
+				
+				// update playPause button label	
+				switch(_videoStatus)
+				{
+					case VideoStatusEnum.VIDEO_STATUS_PAUSING:
+					case VideoStatusEnum.VIDEO_STATUS_STOP:
+						btnPlayPause.label = "Play";
+						break;
+					case VideoStatusEnum.VIDEO_STATUS_PLAYING:
+						btnPlayPause.label = "Pause";
+						break;
+				}
+				
+				// start the main video loop!
+				videoPlayingLoop();
+			}
+			
+			private var previousTime:Number = 0;
+			private function videoPlayingLoop():void{
+				
+				if (_videoStatus == VideoStatusEnum.VIDEO_STATUS_PLAYING)
+				{
+					var curTime:Number = Math.floor(_ns.time);
+					
+					if (Math.abs(curTime - previousTime) >= 1)
+					{
+						trace("Playing: " + curTime);
+						
+						lblTime.text = curTime.toString();
+						seekBar.value = curTime;
+						previousTime = curTime;	
+						
+						// end of play
+						if (curTime >= _videoDuration) 
+						{
+							_ns.pause();
+							_ns.seek(0);
+							curTime = 0;
+							previousTime = -1;
+						}
+					}
+					
+					// loop every 200 million seconds.
+					setTimeout(videoPlayingLoop, 200);
+				}	
+			}
+			
+			protected function seekBar_changeHandler(event:Event):void
+			{
+				// seek to video keyframe
+				_ns.seek(seekBar.value);
+				lblTime.text = seekBar.value.toString();
+			}
+			
+			protected function btnPlayPause_clickHandler(event:MouseEvent):void
+			{
+				_ns.togglePause();			
+			}
+			
+			private var storeVideoStatus:VideoStatusEnum;
+			protected function seekBar_changeStartHandler(event:FlexEvent):void
+			{
+				storeVideoStatus = _videoStatus;
+				_ns.pause();
+			}
+			protected function seekBar_changeEndHandler(event:FlexEvent):void
+			{
+				_videoStatus = storeVideoStatus;
+				if (_videoStatus == VideoStatusEnum.VIDEO_STATUS_PLAYING) _ns.resume();
+			}
+			
+		]]>
+	</fx:Script>
+	
+	<fx:Declarations>
+		<!-- Place non-visual elements (e.g., services, value objects) here -->
+		<s:HTTPService id="xmlHttpService" 
+					   url="http://static.smdg.ca/videoPlayer/videotest/test1.xml"
+					   result="xmlHttpService_resultHandler(event)" />
+	</fx:Declarations>
+	
+	<s:VideoDisplay id="videoDisplay" width="1024" height="600" x="0" y="0" />
+	
+	<s:Group id="playerControllerGroup" width="560">
+		<!-- Play / Pause Control -->
+		<s:Button id="btnPlayPause" click="btnPlayPause_clickHandler(event)" />
+		<!-- Seekbar -->
+		<s:HSlider id="seekBar" x="100" y="5" width="300" changeStart="seekBar_changeStartHandler(event)" changeEnd="seekBar_changeEndHandler(event)" change="seekBar_changeHandler(event)" showDataTip="false" />
+		
+		<!-- Display current time of the playhead and video duration -->
+		<s:Label id="lblTime" text="0" x="481" y="5" />
+		<s:Label text="/" x="496" y="5" />
+		<s:Label id="lblTotal" x="502" text="0" y="5" />
+	</s:Group>
+	
+	<s:Group id="playerDisplayGroup">
+		<!-- Displays video's name -->
+		<s:Label id="lblTitle" fontSize="18" color="#FFFFFF" >
+			<s:filters>
+				<s:DropShadowFilter distance="2" angle="45"/>
+			</s:filters>	
+		</s:Label>
+	</s:Group>
+	
+</s:Application>
